@@ -10,3 +10,10 @@ class Task(Base):
     deadline = Column(String)
     priority = Column(Integer)
     completed = Column(Boolean, default=False)
+
+class User(Base):
+    __tablename__ = 'user'
+
+    id = Column(Integer, primary_key=True, index=True)
+    email = Column(String, unique=True, index=True)
+    password = Column(String)
