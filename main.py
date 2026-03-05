@@ -1,14 +1,20 @@
 from fastapi import FastAPI, status, HTTPException, Depends,Query
-from pydantic import BaseModel
+from pydantic import BaseModel,EmailStr
 from database import engine, SessionLocal
 from sqlalchemy.orm import Session
 import models
-from datetime import date
+from datetime import date,datetime,timedelta
 from typing import Optional
+from passlib.context import CryptContext
+from jose import JWTError,jwt
+
 
 models.Base.metadata.create_all(bind=engine)
-
 app = FastAPI()
+
+SECRET_KEY = "supersecretkey"
+ALGORITHM = "HS256"
+ACCESS_TOKEN_EXPIRE_MINUTES = 30
 
 def get_db():
     db = SessionLocal()
@@ -17,7 +23,6 @@ def get_db():
     finally:
         db.close()
 
-
 # Model user sends (NO id)
 class TaskCreate(BaseModel):
     title: str
@@ -25,11 +30,32 @@ class TaskCreate(BaseModel):
     priority: str | None = None
     deadline: date | None = None
 
-
 # Model stored internally (WITH id)
 class Task(TaskCreate):
     id: int
 
+#add pass hashing funtion
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+def hash_password(password: str):
+    return pwd_context.hash(password)
+
+#create token function
+def create_access_token(data: dict):
+    to_encode = data.copy()
+    expires = datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    to_encode.update({"exp": expires})
+    encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+    return encoded_jwt
+
+#password verification
+def verify_password(plain_password, hashed_password):
+    return pwd_context.verify(plain_password, hashed_password)
+
+
+#user input
+class UserCreate(BaseModel):
+    email: EmailStr
+    password: str
 
 @app.get("/")
 def home():
@@ -42,7 +68,9 @@ def add_task(task: TaskCreate, db: Session = Depends(get_db)):
 
     new_task = models.Task(
         title=task.title,
-        completed=task.completed
+        completed=task.completed,
+        priority=task.priority,
+        deadline=task.deadline,
     )
     db.add(new_task)
     db.commit()
@@ -107,6 +135,8 @@ def update_task(task_id: int, updated_task: TaskCreate,
 
     task.title = updated_task.title
     task.completed = updated_task.completed
+    task.priority = updated_task.priority
+    task.deadline = updated_task.deadline
 
     db.commit()
     db.refresh(task)
@@ -148,4 +178,33 @@ def task_stats(db: Session = Depends(get_db)):
         "completed_tasks": completed,
         "pending_tasks": pending,
         "high_priority_tasks": high_priority
+    }
+
+@app.post("/register")
+def register(user: UserCreate, db: Session = Depends(get_db)):
+    existing_user = db.query(models.User).filter(models.User.email == user.email).first()
+    if existing_user:
+        raise HTTPException(status_code=400, detail="Email already registered")
+    hashed_password = hash_password(user.password)
+    new_user = models.User(
+        email=user.email,
+        password = hashed_password,
+    )
+    db.add(new_user)
+    db.commit()
+    db.refresh(new_user)
+    return {"message": "User registered successfully"}
+
+#login endpoint
+@app.post("/login")
+def login(user: UserCreate, db: Session = Depends(get_db)):
+    db_user = db.query(models.User).filter(models.User.email == user.email).first()
+    if not db_user:
+        raise HTTPException(status_code=400, detail="Invalid email or password")
+    if not verify_password(user.password, db_user.password):
+        raise HTTPException(status_code=400, detail="Invalid email or password")
+    token = create_access_token(data={"sub": db_user.email})
+    return {
+        "access_token": token,
+        "token_type": "bearer",
     }
