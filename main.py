@@ -7,12 +7,13 @@ from datetime import date,datetime,timedelta
 from typing import Optional
 from passlib.context import CryptContext
 from jose import JWTError,jwt
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from config import SECRET_KEY
 
 
 models.Base.metadata.create_all(bind=engine)
 app = FastAPI()
 
-SECRET_KEY = "supersecretkey"
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 30
 
@@ -33,6 +34,28 @@ class TaskCreate(BaseModel):
 # Model stored internally (WITH id)
 class Task(TaskCreate):
     id: int
+
+#create function to get current user from token
+security = HTTPBearer()
+def get_current_user(
+        credentials: HTTPAuthorizationCredentials = Depends(security),
+        db: Session = Depends(get_db)
+):
+    token = credentials.credentials
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        email = payload.get("sub")
+        if email is None:
+            raise HTTPException(status_code=401, detail="Invalid token")
+
+    except JWTError:
+        raise HTTPException(status_code=401, detail="Invalid token")
+
+    user = db.query(models.User).filter(models.User.email == email).first()
+    if user is None:
+            raise HTTPException(status_code=404, detail="User not found")
+    return user
+
 
 #add pass hashing funtion
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
@@ -64,13 +87,18 @@ def home():
 
 # ✅ Create Task
 @app.post("/task")
-def add_task(task: TaskCreate, db: Session = Depends(get_db)):
+def add_task(
+        task: TaskCreate,
+        db: Session = Depends(get_db),
+        current_user: models.User = Depends(get_current_user)
+):
 
     new_task = models.Task(
         title=task.title,
         completed=task.completed,
         priority=task.priority,
         deadline=task.deadline,
+        user_id=current_user.id
     )
     db.add(new_task)
     db.commit()
@@ -82,21 +110,14 @@ def add_task(task: TaskCreate, db: Session = Depends(get_db)):
 # {✅ Get All Tasks
 @app.get("/tasks")
 def get_tasks(
-        priority: Optional[str] = Query(None),
-        sort: Optional[str] = Query(None),
-        db: Session = Depends(get_db)
+        db: Session = Depends(get_db),
+        current_user: models.User = Depends(get_current_user)
 ):
+    tasks = db.query(models.Task).filter(
+        models.Task.user_id == current_user.id
+    ).all()
+    return tasks
 
-        query = db.query(models.Task)
-        #filter
-        if priority:
-            query = query.filter(models.Task.priority == priority)
-
-        #SORT
-        if sort == "deadline":
-            query = query.order_by(models.Task.deadline)
-        tasks = query.all()
-        return tasks
 
 
 # ✅ Get Single Task
