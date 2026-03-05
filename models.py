@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer,String,Boolean
+from sqlalchemy import Column, Integer,String,Boolean,Date, ForeignKey
 from database import Base
 
 class Task(Base):
@@ -10,6 +10,7 @@ class Task(Base):
     deadline = Column(String)
     priority = Column(Integer)
     completed = Column(Boolean, default=False)
+    user_id = Column(Integer, ForeignKey('user.id'))
 
 class User(Base):
     __tablename__ = 'user'
